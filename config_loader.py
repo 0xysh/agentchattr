@@ -7,6 +7,8 @@ Per-invocation overrides: the following environment variables, if set,
 override values from config.toml. This lets dotfiles/launcher layers run
 isolated instances per project without editing the repo's config file.
 
+  AGENTCHATTR_CONFIG          → alternate config file path
+
   AGENTCHATTR_DATA_DIR        → server.data_dir
   AGENTCHATTR_PORT            → server.port           (int)
   AGENTCHATTR_MCP_HTTP_PORT   → mcp.http_port         (int)
@@ -24,6 +26,7 @@ import tomllib
 from pathlib import Path
 
 ROOT = Path(__file__).parent
+CONFIG_PATH_ENV_VAR = "AGENTCHATTR_CONFIG"
 
 
 # Mapping: env var name → (config section, key, is_int)
@@ -37,6 +40,7 @@ _ENV_OVERRIDES = [
 
 # Mapping: CLI flag → env var (for apply_cli_overrides)
 CLI_OVERRIDE_FLAGS = [
+    ("--config",        CONFIG_PATH_ENV_VAR),
     ("--data-dir",      "AGENTCHATTR_DATA_DIR"),
     ("--port",          "AGENTCHATTR_PORT"),
     ("--mcp-http-port", "AGENTCHATTR_MCP_HTTP_PORT"),
@@ -100,7 +104,65 @@ def _apply_env_overrides(config: dict) -> None:
         config.setdefault(section, {})[key] = value
 
 
-def load_config(root: Path | None = None) -> dict:
+def resolve_config_path(root: Path | None = None, config_path: Path | str | None = None) -> Path:
+    """Resolve config path from explicit arg, env var, or default config.toml."""
+    root = Path(root or ROOT).resolve()
+    raw = config_path if config_path is not None else os.environ.get(CONFIG_PATH_ENV_VAR)
+    if not raw:
+        return root / "config.toml"
+
+    path = Path(raw).expanduser()
+    if not path.is_absolute():
+        path = (root / path).resolve()
+    return path
+
+
+def normalize_config_paths(config: dict, config_path: Path | str) -> dict:
+    """Resolve config-file-relative paths to absolute paths.
+
+    This is used by entry points after load_config(). It keeps load_config()
+    backwards-compatible for tests and callers that expect the raw config
+    values, while making alternate config files behave predictably when they
+    live outside the repo root.
+    """
+    cfg = dict(config)
+    base_dir = Path(config_path).expanduser().resolve().parent
+
+    server = dict(cfg.get("server", {}))
+    if isinstance(server.get("data_dir"), str):
+        data_dir = Path(server["data_dir"]).expanduser()
+        if not data_dir.is_absolute():
+            data_dir = (base_dir / data_dir).resolve()
+        server["data_dir"] = str(data_dir)
+    cfg["server"] = server
+
+    images = dict(cfg.get("images", {}))
+    if isinstance(images.get("upload_dir"), str):
+        upload_dir = Path(images["upload_dir"]).expanduser()
+        if not upload_dir.is_absolute():
+            upload_dir = (base_dir / upload_dir).resolve()
+        images["upload_dir"] = str(upload_dir)
+    if images:
+        cfg["images"] = images
+
+    agents = {}
+    for name, agent_cfg in cfg.get("agents", {}).items():
+        if not isinstance(agent_cfg, dict):
+            agents[name] = agent_cfg
+            continue
+        agent = dict(agent_cfg)
+        if isinstance(agent.get("cwd"), str):
+            cwd = Path(agent["cwd"]).expanduser()
+            if not cwd.is_absolute():
+                cwd = (base_dir / cwd).resolve()
+            agent["cwd"] = str(cwd)
+        agents[name] = agent
+    cfg["agents"] = agents
+
+    return cfg
+
+
+def load_config(root: Path | None = None, config_path: Path | str | None = None) -> dict:
     """Load config.toml and merge config.local.toml if it exists.
 
     config.local.toml is gitignored and intended for user-specific agents
@@ -111,13 +173,13 @@ def load_config(root: Path | None = None) -> dict:
     AGENTCHATTR_* environment variables override values from config.toml
     (see module docstring for the list).
     """
-    root = root or ROOT
-    config_path = root / "config.toml"
+    root = Path(root or ROOT).resolve()
+    resolved_config_path = resolve_config_path(root, config_path)
 
-    with open(config_path, "rb") as f:
+    with open(resolved_config_path, "rb") as f:
         config = tomllib.load(f)
 
-    local_path = root / "config.local.toml"
+    local_path = resolved_config_path.parent / "config.local.toml"
     if local_path.exists():
         with open(local_path, "rb") as f:
             local = tomllib.load(f)

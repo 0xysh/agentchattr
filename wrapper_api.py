@@ -39,14 +39,15 @@ def _auth_headers(token: str, *, include_json: bool = False) -> dict[str, str]:
 
 
 def main():
-    from config_loader import apply_cli_overrides, load_config
+    from config_loader import apply_cli_overrides, load_config, normalize_config_paths, resolve_config_path
     from wrapper import _register_instance
 
     # Apply AGENTCHATTR_* overrides (from CLI flags or env) BEFORE loading
     # config so the API wrapper connects to the same data_dir/ports as a
     # server launched with matching flags.
     apply_cli_overrides()
-    config = load_config(ROOT)
+    config_path = resolve_config_path(ROOT)
+    config = normalize_config_paths(load_config(ROOT, config_path=config_path), config_path)
     agent_names = list(config.get("agents", {}).keys())
     api_agents = [n for n in agent_names if config["agents"][n].get("type") == "api"]
 
@@ -64,6 +65,7 @@ def main():
     parser.add_argument("--label", type=str, default=None, help="Custom display label")
     # Per-project isolation flags (consumed by apply_cli_overrides above;
     # listed here so --help shows them and argparse doesn't error on them).
+    parser.add_argument("--config",        default=None, help="Alternate config file path")
     parser.add_argument("--data-dir",      default=None, help="Override server.data_dir (path)")
     parser.add_argument("--port",          default=None, help="Override server.port (int)")
     parser.add_argument("--mcp-http-port", default=None, help="Override mcp.http_port (int)")
@@ -74,7 +76,7 @@ def main():
     agent = args.agent
     agent_cfg = config["agents"][agent]
     server_port = config.get("server", {}).get("port", 8300)
-    data_dir = ROOT / config.get("server", {}).get("data_dir", "./data")
+    data_dir = Path(config.get("server", {}).get("data_dir", str(ROOT / "data")))
     data_dir.mkdir(parents=True, exist_ok=True)
 
     # Model API config
@@ -309,6 +311,7 @@ def main():
         queue_file.write_text("", "utf-8")
 
     print(f"\n  === {agent_cfg.get('label', agent)} API Wrapper ===")
+    print(f"  Config: {config_path}")
     print(f"  Model endpoint: {base_url}/chat/completions")
     if model:
         print(f"  Model: {model}")

@@ -380,9 +380,34 @@ python wrapper.py claude
 python wrapper.py claude -- --dangerously-skip-permissions
 ```
 
+### Interactive room launcher (macOS)
+
+If you want a custom mix like `2 codex + 1 claude + 1 gemini` with your own `@handles`, use:
+
+```bash
+./macos-linux/start_room_launcher.sh
+```
+
+The launcher asks:
+
+- how many instances per CLI provider
+- which project folder all agents should run in
+- what each handle should be (used as the `@mention` name)
+
+It generates `data/launcher.room.toml`, starts `run.py` with that config, and launches one wrapper terminal per handle.
+
+Preview without launching:
+
+```bash
+./macos-linux/start_room_launcher.sh --dry-run
+```
+
 ### Configuration
 
 Edit `config.toml` to customize agents, ports, and routing:
+
+- Default config path: `./config.toml`
+- Override config path: pass `--config path/to/file.toml` or set `AGENTCHATTR_CONFIG`
 
 ```toml
 [server]

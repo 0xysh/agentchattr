@@ -561,13 +561,14 @@ def main():
     import urllib.error
     import urllib.request
 
-    from config_loader import apply_cli_overrides, load_config
+    from config_loader import apply_cli_overrides, load_config, normalize_config_paths, resolve_config_path
 
     # Apply AGENTCHATTR_* overrides (from CLI flags or env) BEFORE loading
     # config so the wrapper connects to the same data_dir/ports as a server
     # launched with matching flags.
     apply_cli_overrides()
-    config = load_config(ROOT)
+    config_path = resolve_config_path(ROOT)
+    config = normalize_config_paths(load_config(ROOT, config_path=config_path), config_path)
 
     agent_names = list(config.get("agents", {}).keys())
 
@@ -578,6 +579,7 @@ def main():
     # Per-project isolation flags (must match the server's flags so wrappers
     # launched separately connect to the right instance). Values are consumed
     # by apply_cli_overrides() above; listing here so --help shows them.
+    parser.add_argument("--config",        default=None, help="Alternate config file path")
     parser.add_argument("--data-dir",      default=None, help="Override server.data_dir (path)")
     parser.add_argument("--port",          default=None, help="Override server.port (int)")
     parser.add_argument("--mcp-http-port", default=None, help="Override mcp.http_port (int)")
@@ -589,7 +591,7 @@ def main():
     agent_cfg = config.get("agents", {}).get(agent, {})
     cwd = agent_cfg.get("cwd", ".")
     command = agent_cfg.get("command", agent)
-    data_dir = ROOT / config.get("server", {}).get("data_dir", "./data")
+    data_dir = Path(config.get("server", {}).get("data_dir", str(ROOT / "data")))
     data_dir.mkdir(parents=True, exist_ok=True)
     server_port = config.get("server", {}).get("port", 8300)
     mcp_cfg = config.get("mcp", {})
@@ -665,7 +667,7 @@ def main():
             _apply_mcp_inject(
                 inject_cfg, instance_name, data_dir, proxy_url,
                 token=new_token, mcp_cfg=mcp_cfg,
-                project_dir=(ROOT / cwd).resolve(),
+                project_dir=Path(cwd).resolve(),
             )
         except Exception:
             pass
@@ -711,7 +713,7 @@ def main():
         sys.exit(1)
     command = resolved
 
-    project_dir = (ROOT / cwd).resolve()
+    project_dir = Path(cwd).resolve()
 
     # Gemini: ensure the project directory is trusted so MCPs are allowed.
     # Gemini blocks ALL MCPs for untrusted folders — even system-settings ones.
@@ -732,6 +734,7 @@ def main():
     )
 
     print(f"  === {assigned_name.capitalize()} Chat Wrapper ===")
+    print(f"  Config: {config_path}")
     if not needs_proxy:
         print(f"  MCP: direct connect ({inject_mode}) with bearer auth")
         if mcp_settings_path:

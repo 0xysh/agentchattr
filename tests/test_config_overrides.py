@@ -7,6 +7,7 @@ same env vars produce the same config regardless of entry point.
 
 import os
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -18,6 +19,7 @@ import config_loader  # noqa: E402
 
 
 ENV_VARS = [
+    "AGENTCHATTR_CONFIG",
     "AGENTCHATTR_DATA_DIR",
     "AGENTCHATTR_PORT",
     "AGENTCHATTR_MCP_HTTP_PORT",
@@ -130,14 +132,16 @@ class CliOverrideExtractionTests(unittest.TestCase):
                 os.environ[k] = v
 
     def test_space_separated_flags_set_env_vars(self):
-        argv = ["run.py", "--port", "8310", "--data-dir", "./foo"]
+        argv = ["run.py", "--config", "./room.toml", "--port", "8310", "--data-dir", "./foo"]
         config_loader.apply_cli_overrides(argv)
+        self.assertEqual(os.environ["AGENTCHATTR_CONFIG"], "./room.toml")
         self.assertEqual(os.environ["AGENTCHATTR_PORT"], "8310")
         self.assertEqual(os.environ["AGENTCHATTR_DATA_DIR"], "./foo")
 
     def test_equals_form_flags_set_env_vars(self):
-        argv = ["run.py", "--port=8310", "--data-dir=./foo"]
+        argv = ["run.py", "--config=./room.toml", "--port=8310", "--data-dir=./foo"]
         config_loader.apply_cli_overrides(argv)
+        self.assertEqual(os.environ["AGENTCHATTR_CONFIG"], "./room.toml")
         self.assertEqual(os.environ["AGENTCHATTR_PORT"], "8310")
         self.assertEqual(os.environ["AGENTCHATTR_DATA_DIR"], "./foo")
 
@@ -195,6 +199,68 @@ class CliOverrideExtractionTests(unittest.TestCase):
         config_loader.apply_cli_overrides(argv)
         self.assertNotIn("AGENTCHATTR_PORT", os.environ)
         self.assertNotIn("AGENTCHATTR_DATA_DIR", os.environ)
+
+
+class ConfigPathOverrideTests(unittest.TestCase):
+    def setUp(self):
+        self._saved = {k: os.environ.get(k) for k in ENV_VARS}
+        for k in ENV_VARS:
+            os.environ.pop(k, None)
+
+    def tearDown(self):
+        for k, v in self._saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+    def test_default_config_path_is_repo_config(self):
+        self.assertEqual(config_loader.resolve_config_path(ROOT), ROOT / "config.toml")
+
+    def test_custom_config_path_is_resolved_from_repo_root(self):
+        os.environ["AGENTCHATTR_CONFIG"] = "./data/room.toml"
+        expected = (ROOT / "data" / "room.toml").resolve()
+        self.assertEqual(config_loader.resolve_config_path(ROOT), expected)
+
+    def test_load_config_uses_selected_config_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            custom = tmp_path / "room.toml"
+            custom.write_text(
+                """
+[server]
+port = 8399
+data_dir = "./room-data"
+
+[agents.alpha]
+command = "codex"
+cwd = "../workspace"
+color = "#123456"
+label = "Alpha"
+""".strip()
+                + "\n",
+                encoding="utf-8",
+            )
+            config = config_loader.load_config(ROOT, config_path=custom)
+            self.assertEqual(config["server"]["port"], 8399)
+            self.assertIn("alpha", config["agents"])
+
+    def test_normalize_config_paths_uses_config_file_directory(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            config_path = tmp_path / "nested" / "room.toml"
+            config_path.parent.mkdir(parents=True, exist_ok=True)
+            normalized = config_loader.normalize_config_paths(
+                {
+                    "server": {"data_dir": "./room-data"},
+                    "images": {"upload_dir": "./uploads"},
+                    "agents": {"alpha": {"cwd": "../workspace"}},
+                },
+                config_path,
+            )
+            self.assertEqual(normalized["server"]["data_dir"], str((config_path.parent / "room-data").resolve()))
+            self.assertEqual(normalized["images"]["upload_dir"], str((config_path.parent / "uploads").resolve()))
+            self.assertEqual(normalized["agents"]["alpha"]["cwd"], str((config_path.parent / "../workspace").resolve()))
 
 
 if __name__ == "__main__":

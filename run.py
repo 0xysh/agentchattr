@@ -22,6 +22,7 @@ def _parse_args():
                "can isolate per-project instances by passing matching values to "
                "each process.",
     )
+    parser.add_argument("--config",        default=None, help="Alternate config file path")
     parser.add_argument("--data-dir",      default=None, help="Override server.data_dir (path)")
     parser.add_argument("--port",          default=None, help="Override server.port (int)")
     parser.add_argument("--mcp-http-port", default=None, help="Override mcp.http_port (int)")
@@ -42,17 +43,17 @@ def main():
     # Parse flags for --help support; the actual env propagation happens via
     # the shared config_loader.apply_cli_overrides helper so run.py and the
     # wrappers use identical extraction logic.
-    _parse_args()
+    args = _parse_args()
 
-    from config_loader import apply_cli_overrides, load_config
+    from config_loader import apply_cli_overrides, load_config, normalize_config_paths, resolve_config_path
     apply_cli_overrides()
 
-    config_path = ROOT / "config.toml"
+    config_path = resolve_config_path(ROOT)
     if not config_path.exists():
         print(f"Error: {config_path} not found")
         sys.exit(1)
 
-    config = load_config(ROOT)
+    config = normalize_config_paths(load_config(ROOT, config_path=config_path), config_path)
 
     # --- Security: generate a random session token (in-memory only) ---
     session_token = secrets.token_hex(32)
@@ -75,7 +76,7 @@ def main():
     mcp_bridge.agents = app_agents
 
     # Enable cursor and role persistence across restarts
-    data_dir = ROOT / config.get("server", {}).get("data_dir", "./data")
+    data_dir = Path(config.get("server", {}).get("data_dir", str(ROOT / "data")))
     mcp_bridge._CURSORS_FILE = data_dir / "mcp_cursors.json"
     mcp_bridge._load_cursors()
     mcp_bridge._ROLES_FILE = data_dir / "roles.json"
@@ -138,7 +139,7 @@ def main():
         print("  - If agents run with auto-approve, this means remote code execution")
         print()
         print("  Only use this on a trusted home network. Never on public/shared WiFi.")
-        if "--allow-network" not in sys.argv:
+        if not args.allow_network:
             print("  Pass --allow-network to start anyway, or set host to 127.0.0.1.\n")
             sys.exit(1)
         else:
@@ -152,6 +153,7 @@ def main():
                 sys.exit(1)
 
     print(f"\n  agentchattr")
+    print(f"  Config:  {config_path}")
     print(f"  Web UI:  http://{host}:{port}")
     print(f"  MCP HTTP: http://{host}:{http_port}/mcp  (Claude, Codex)")
     print(f"  MCP SSE:  http://{host}:{sse_port}/sse   (Gemini)")
@@ -164,4 +166,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
